@@ -56,3 +56,20 @@
 といった判断は、**後から行います**。
 
 人が無理に整理せず、AI と分業することを前提とした運用を想定しています。
+
+
+---
+
+## 新しい使い方について
+
+Ideaは Idea template で起票（デフォで phase:idea_explore）
+
+idea_explore：ChatGPTで方向性とNextActionを出す
+
+idea_define：やる案を決め、次フェーズへ
+
+research → poc → design → implement
+
+進めない、合わないなら phase:frozen
+
+（もし必要なら、こちらでREADMEもファイルとして追記用の文面をそのままペーストできる形で用意します）
