@@ -1,0 +1,121 @@
+name: Issue phase commands
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  issues: write
+jobs:
+  commands:
+    if: github.event.issue.pull_request == null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+            const body = (context.payload.comment.body || "").trim().toLowerCase();
+
+            const phaseOrder = [
+              "phase:idea_explore",
+              "phase:idea_define",
+              "phase:research",
+              "phase:poc",
+              "phase:design",
+              "phase:implement"
+            ];
+            const validPhases = new Set([...phaseOrder, "phase:frozen"]);
+            const phasePrefix = "phase:";
+
+            function currentPhase(issue) {
+              const phases = (issue.labels || [])
+                .map(l => l.name || "")
+                .filter(n => n.startsWith(phasePrefix));
+              return phases[0] || null;
+            }
+
+            async function setPhase(issue, next) {
+              const phases = (issue.labels || [])
+                .map(l => l.name || "")
+                .filter(n => n.startsWith(phasePrefix));
+              for (const p of phases) {
+                if (p !== next) {
+                  try { await github.rest.issues.removeLabel({ owner, repo, issue_number, name: p }); } catch (e) {}
+                }
+              }
+              const hasNext = (issue.labels || []).some(l => (l.name || "") === next);
+              if (!hasNext) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [next] });
+              }
+            }
+
+            function nextPhaseOf(curr) {
+              if (!curr) return phaseOrder[0];
+              if (curr === "phase:frozen") return phaseOrder[0];
+              const idx = phaseOrder.indexOf(curr);
+              if (idx < 0) return phaseOrder[0];
+              if (idx >= phaseOrder.length - 1) return phaseOrder[idx];
+              return phaseOrder[idx + 1];
+            }
+
+            function guidance(phase) {
+              const map = {
+                "phase:idea_explore": "🧠 Idea Explore\n\n- ChatGPTでExplore\n- 結果貼る\n- /approve で次へ",
+                "phase:idea_define": "🎯 Idea Define\n\n- 案を1つに絞る\n- スコープ/成功条件\n- /approve",
+                "phase:research": "🔎 Research\n\n- 調査結果整理\n- PoC案\n- /approve",
+                "phase:poc": "🧪 PoC\n\n- 最小検証\n- 学び\n- /approve /freeze",
+                "phase:design": "📐 Design\n\n- 仕様まとめ\n- タスク分割\n- /approve",
+                "phase:implement": "🛠 Implement\n\n- Codexプロンプト\n- PR/分割",
+                "phase:frozen": "❄ Frozen\n\n- 保留理由/再開条件\n- /phase idea_explore"
+              };
+              return map[phase] || `Phase: ${phase}`;
+            }
+
+            async function comment(msg) {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: msg });
+            }
+
+            async function getIssue() {
+              const res = await github.rest.issues.get({ owner, repo, issue_number });
+              return res.data;
+            }
+
+            if (body === "/approve") {
+              const issue = await getIssue();
+              const curr = currentPhase(issue);
+              const next = nextPhaseOf(curr);
+              await setPhase(issue, next);
+              await comment(`✅ Phase moved: ${curr || "none"} → ${next}\n\n${guidance(next)}`);
+              return;
+            }
+
+            if (body === "/freeze") {
+              const issue = await getIssue();
+              const curr = currentPhase(issue);
+              const next = "phase:frozen";
+              await setPhase(issue, next);
+              await comment(`❄️ Frozen: ${curr || "none"} → ${next}\n\n${guidance(next)}`);
+              return;
+            }
+
+            if (body.startsWith("/phase")) {
+              const issue = await getIssue();
+              const parts = body.split(/\s+/).filter(Boolean);
+              if (parts.length < 2) {
+                await comment("Usage: /phase idea_explore|idea_define|research|poc|design|implement|frozen");
+                return;
+              }
+              let name = parts[1].trim();
+              const alias = { idea: "idea_explore", explore: "idea_explore", define: "idea_define" };
+              if (alias[name]) name = alias[name];
+              const label = name.startsWith("phase:") ? name : `phase:${name}`;
+              if (!validPhases.has(label)) {
+                await comment(`Unknown phase: ${label}`);
+                return;
+              }
+              const curr = currentPhase(issue);
+              await setPhase(issue, label);
+              await comment(`🧭 Phase set: ${curr || "none"} → ${label}\n\n${guidance(label)}`);
+              return;
+            }
