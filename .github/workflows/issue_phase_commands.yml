@@ -1,9 +1,12 @@
 name: Issue phase commands
+
 on:
   issue_comment:
     types: [created]
+
 permissions:
   issues: write
+
 jobs:
   commands:
     if: github.event.issue.pull_request == null
@@ -15,7 +18,8 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const issue_number = context.payload.issue.number;
-            const body = (context.payload.comment.body || "").trim().toLowerCase();
+            const bodyRaw = (context.payload.comment.body || "").trim();
+            const lower = bodyRaw.toLowerCase();
 
             const phaseOrder = [
               "phase:idea_explore",
@@ -25,8 +29,14 @@ jobs:
               "phase:design",
               "phase:implement"
             ];
-            const validPhases = new Set([...phaseOrder, "phase:frozen"]);
+
             const phasePrefix = "phase:";
+            const validPhases = new Set([...phaseOrder, "phase:frozen"]);
+
+            async function getIssue() {
+              const res = await github.rest.issues.get({ owner, repo, issue_number });
+              return res.data;
+            }
 
             function currentPhase(issue) {
               const phases = (issue.labels || [])
@@ -39,11 +49,15 @@ jobs:
               const phases = (issue.labels || [])
                 .map(l => l.name || "")
                 .filter(n => n.startsWith(phasePrefix));
+
               for (const p of phases) {
                 if (p !== next) {
-                  try { await github.rest.issues.removeLabel({ owner, repo, issue_number, name: p }); } catch (e) {}
+                  try {
+                    await github.rest.issues.removeLabel({ owner, repo, issue_number, name: p });
+                  } catch (e) {}
                 }
               }
+
               const hasNext = (issue.labels || []).some(l => (l.name || "") === next);
               if (!hasNext) {
                 await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [next] });
@@ -51,71 +65,295 @@ jobs:
             }
 
             function nextPhaseOf(curr) {
-              if (!curr) return phaseOrder[0];
-              if (curr === "phase:frozen") return phaseOrder[0];
+              if (!curr) return "phase:idea_explore";
+              if (curr === "phase:frozen") return "phase:idea_explore";
               const idx = phaseOrder.indexOf(curr);
-              if (idx < 0) return phaseOrder[0];
-              if (idx >= phaseOrder.length - 1) return phaseOrder[idx];
+              if (idx < 0) return "phase:idea_explore";
+              if (idx >= phaseOrder.length - 1) return phaseOrder[phaseOrder.length - 1];
               return phaseOrder[idx + 1];
             }
 
-            function guidance(phase) {
+            function phaseGuidance(phase) {
               const map = {
-                "phase:idea_explore": "🧠 Idea Explore\n\n- ChatGPTでExplore\n- 結果貼る\n- /approve で次へ",
-                "phase:idea_define": "🎯 Idea Define\n\n- 案を1つに絞る\n- スコープ/成功条件\n- /approve",
-                "phase:research": "🔎 Research\n\n- 調査結果整理\n- PoC案\n- /approve",
-                "phase:poc": "🧪 PoC\n\n- 最小検証\n- 学び\n- /approve /freeze",
-                "phase:design": "📐 Design\n\n- 仕様まとめ\n- タスク分割\n- /approve",
-                "phase:implement": "🛠 Implement\n\n- Codexプロンプト\n- PR/分割",
-                "phase:frozen": "❄ Frozen\n\n- 保留理由/再開条件\n- /phase idea_explore"
+                "phase:idea_explore": [
+                  "\ud83e\udde0 **Idea Explore\uff08\u767a\u6563\u30fb\u5206\u5c90\u63a2\u7d22\uff09**",
+                  "",
+                  "## \u6b21\u306b\u3084\u308b\u3053\u3068",
+                  "1) ChatGPT\u3067\u63a2\u7d22\uff08\u65b9\u5411\u60273\u301c5 + NextAction\u00d73\uff09",
+                  "2) \u8fd4\u3063\u3066\u304d\u305f\u7d50\u679c\u3092\u3053\u306eIssue\u306b\u8cbc\u308b",
+                  "3) \u9032\u3081\u308b\u306a\u3089 `/approve`",
+                  "",
+                  "## ChatGPT\u5b9f\u884c\u30d7\u30ed\u30f3\u30d7\u30c8\uff08\u30b3\u30d4\u30da\uff09",
+                  "\u4ee5\u4e0b\u306e\u30a2\u30a4\u30c7\u30a2\u3092\u7cbe\u932c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+                  "",
+                  "1. \u65b9\u5411\u6027\u30923\u301c5\u500b\u63d0\u793a",
+                  "2. \u4e0d\u8db3\u60c5\u5831\u304c\u3042\u308c\u3070\u8cea\u554f\uff08\u30c6\u30f3\u30d7\u30ec\u306b\u5bfe\u3066\u306f\u307e\u308a\u306b\u304f\u3044\u5834\u5408\u306f\u300c\u3053\u306e\u30a2\u30a4\u30c7\u30a2\u306e\u672c\u8cea\u306f\u4f55\u304b\uff1f\u300d\u3092\u8ffd\u3044\u8fd4\u3057\u3066\u6df1\u3081\u308b\uff09",
+                  "3. \u5236\u7d04\u304c\u3042\u308b\u5834\u5408\u306e\u4ee3\u66ff\u6848",
+                  "4. \u73fe\u5b9f\u7684\u306aNextAction\u30923\u3064\u63d0\u793a",
+                  "",
+                  "\u5404NextAction\u306b\u3064\u3044\u3066\uff1a",
+                  "- \u5206\u985e\uff08\u60c5\u5831\u53ce\u96c6 / \u6bd4\u8f03 / \u4eee\u8aac\u691c\u8a3c / \u8a2d\u8a08\uff09",
+                  "- \u5b9f\u884c\u4ed5\u69d8\uff08Web\u691c\u7d22ON/OFF\u3001\u51fa\u529b\u5f62\u5f0f\uff09",
+                  "- \u5b9f\u884c\u30d7\u30ed\u30f3\u30d7\u30c8\uff08\u305d\u306e\u307e\u307e\u6295\u3052\u3089\u308c\u308b\u5f62\u5f0f\uff09",
+                  "",
+                  "\u6700\u5f8c\u306b\u300c3\u884c\u307e\u3068\u3081\u300d\u3092\u4ed8\u3051\u3066\u304f\u3060\u3055\u3044\u3002",
+                  "",
+                  "Idea:",
+                  "\uff08Issue\u672c\u6587\u306eIdea\u3092\u8cbc\u308b\uff09",
+                  "",
+                  "## \u671f\u5f85\u30a2\u30a6\u30c8\u30d7\u30c3\u30c8",
+                  "- \u65b9\u5411\u6027\uff083\u301c5\uff09",
+                  "- NextAction\u00d73\uff08\u5b9f\u884c\u4ed5\u69d8\uff0b\u5b9f\u884c\u30d7\u30ed\u30f3\u30d7\u30c8\u4ed8\u304d\uff09",
+                  "- 3\u884c\u307e\u3068\u3081",
+                  "",
+                  "## Issue\u8cbc\u4ed8\u30c6\u30f3\u30d7\u30ec",
+                  "### Idea Explore \u7d50\u679c",
+                  "- \u65b9\u5411\u6027\uff1a",
+                  "  - A:",
+                  "  - B:",
+                  "  - C:",
+                  "- NextAction\uff1a",
+                  "  - \uff09\uff1a",
+                  "  - \uff12\uff1a",
+                  "  - \uff13\uff1a",
+                  "- 3\u884c\u307e\u3068\u3081\uff1a",
+                  "  1.",
+                  "  2.",
+                  "  3.",
+                  "",
+                  "\u6b21\u3078\uff1a`/approve` / \u4fdd\u7559\uff1a`/freeze`"
+                ].join("\n"),
+                "phase:idea_define": [
+                  "\ud83c\udfaf **Idea Define\uff08\u53ce\u675f\u30fbNextAction\u78ba\u5b9a\uff09**",
+                  "",
+                  "## \u6b21\u306b\u3084\u308b\u3053\u3068",
+                  "1) Explore\u7d50\u679c\u304b\u3089\u300c\u307e\u305a\u8a66\u3059\u6848\u300d\u30921\u3064\u9078\u3076\uff08\u307e\u305f\u306f\u4fdd\u7559\u5224\u65ad\uff09",
+                  "2) \u30b9\u30b3\u30fc\u30d7\u30fb\u6210\u529f\u6761\u4ef6\u30fb\u5236\u7d04\u3092\u77ed\u304f\u56fa\u5b9a",
+                  "3) \u9032\u3081\u308b\u306a\u3089 `/approve`",
+                  "",
+                  "## ChatGPT\u6536\u675f\u30d7\u30ed\u30f3\u30d7\u30c8\uff08\u30b3\u30d4\u30da\uff09",
+                  "\u4ee5\u4e0b\u306eExplore\u7d50\u679c\u3092\u8e0f\u307e\u3048\u3066\u3001",
+                  "- \u4eca\u56de\u300c\u307e\u305a\u8a66\u3059\u3079\u304d1\u6848\u300d\u30921\u3064\u306b\u7e2b\u308b",
+                  "- \u30b9\u30b3\u30fc\u30d7\uff08\u3084\u308b/\u3084\u3089\u306a\u3044\uff09\u3092\u660e\u78ba\u306b\u3059\u308b",
+                  "- \u6210\u529f\u6761\u4ef6\uff08PoC\u3067\u4f55\u304c\u5206\u304b\u308c\u3070OK\u304b\uff09\u3092\u5b9a\u7fa9\u3059\u308b",
+                  "- Research\u3067\u78ba\u8a8d\u3059\u308b\u89d2\u5ea6\u3092\u30c1\u30a7\u30c3\u30af\u30ea\u30b9\u30c8\u5316\u3059\u308b",
+                  "\u6700\u5f8c\u306b\u3001\u6b21\u306e\u4e00\u624b\u30fbNextAction\u30921\u3064\u3060\u3051\u63d0\u793a\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+                  "",
+                  "\uff08Explore\u7d50\u679c\u3092\u8cbc\u308b\uff09",
+                  "",
+                  "## Issue\u8cbc\u4ed8\u30c6\u30f3\u30d7\u30ec",
+                  "### Idea Define \u7d50\u679c",
+                  "- \u63a1\u7528\u6848\uff1a",
+                  "- \u30b9\u30b3\u30fc\u30d7\uff1a",
+                  "- \u6210\u529f\u6761\u4ef6\uff1a",
+                  "- research\u30c1\u30a7\u30c3\u30af\u30ea\u30b9\u30c8\uff1a",
+                  "  - [ ]",
+                  "  - [ ]",
+                  "  - [ ]",
+                  "- NextAction\uff08\u6b21\u306e1\u624b\uff09\uff1a",
+                  "",
+                  "\u6b21\u3078\uff1a`/approve`"
+                ].join("\n"),
+                "phase:research": [
+                  "\ud83d\udd0e **Research\uff08\u8abf\u67fb\u30fb\u60c5\u5831\u53ce\u96c6\uff09**",
+                  "",
+                  "## \u6b21\u306b\u3084\u308b\u3053\u3068",
+                  "1) \u30c1\u30a7\u30c3\u30af\u30ea\u30b9\u30c8\u306b\u6cbf\u3063\u3066\u8abf\u67fb\uff08Web\u691c\u7d22ON\u63a8\u5968\uff09",
+                  "2) \u4e8b\u5b9a/\u63a8\u6e2c\u3092\u5206\u3051\u3066\u6574\u7406",
+                  "3) Go/NoGo/\u4fdd\u7559\u3092\u4eee\u6c7a\u3081",
+                  "4) \u6b21\u3078\u9032\u3080\uff1a`/approve`",
+                  "",
+                  "## ChatGPT\u8abf\u67fb\u30d7\u30ed\u30f3\u30d7\u30c8\uff08\u30b3\u30d4\u30da\uff09",
+                  "\u6b21\u306e\u89d2\u5ea6\u3067\u8abf\u67fb\u3057\u3001\u51fa\u5178\uff08URL/\u30b5\u30a4\u30c8\u540d\uff09\u3092\u6dfb\u3048\u3066\u307e\u3068\u3081\u3066\u304f\u3060\u3055\u3044\u3002",
+                  "",
+                  "- \u516c\u5f0f\u60c5\u5831\uff08\u4ed5\u69d8/\u5236\u7d04/\u5bfe\u5fdc\u72b6\u6cc1\uff09",
+                  "- \u5148\u884c\u4e8b\u4f8b\uff08\u6700\u4f4e3\u4ef6\uff09",
+                  "- \u5fc5\u8981\u7269\uff08\u30c4\u30fc\u30eb/\u74b0\u5883/\u30b3\u30b9\u30c8/\u624b\u9806\uff09",
+                  "- \u4e3b\u8981\u30ea\u30b9\u30af\u3068\u56de\u907f\u7b56",
+                  "- \u4e0d\u660e\u70b9\uff08\u8ffd\u52a0\u3067\u78ba\u8a8d\u3059\u3079\u304d\u3053\u3068\uff09",
+                  "",
+                  "\u6700\u5f8c\u306b\u3001",
+                  "- \u300c\u73fe\u6642\u70b9\u306e\u7d50\u8ad6\uff08Go/NoGo/\u4fdd\u7559\uff09\u300d\u30921\u3064",
+                  "- \u6b21\u306b\u3084\u308b\u3079\u304d\u6700\u5c0fPoC\u3092\u63d0\u6848",
+                  "",
+                  "\u30c6\u30fc\u30de\uff1a",
+                  "\uff08\u63a1\u7528\u6848\u3084\u30c1\u30a7\u30c3\u30af\u30ea\u30b9\u30c8\u3092\u8cbc\u308b\uff09",
+                  "",
+                  "## Issue\u8cbc\u4ed8\u30c6\u30f3\u30d7\u30ec",
+                  "### Research \u7d50\u679c",
+                  "- \u516c\u5f0f\u60c5\u5831\uff1a",
+                  "- \u5148\u884c\u4e8b\u4f8b\uff1a",
+                  "  - \u4e8b\u4f8b1\uff1a",
+                  "  - \u4e8b\u4f8b2\uff1a",
+                  "  - \u4e8b\u4f8b3\uff1a",
+                  "- \u5fc5\u8981\u7269\uff1a",
+                  "- \u30ea\u30b9\u30af\uff1a",
+                  "- \u4e0d\u660e\u70b9\uff1a",
+                  "- \u7d50\u8ad6\uff08Go/NoGo/\u4fdd\u7559\uff09\uff1a",
+                  "- \u6700\u5c0fPoC\u6848\uff1a",
+                  "",
+                  "\u6b21\u3078\uff1a`/approve`"
+                ].join("\n"),
+                "phase:poc": [
+                  "\ud83e\uddea **PoC\uff08\u6700\u5c0f\u691c\u8a3c\uff09**",
+                  "",
+                  "## \u6b21\u306b\u3084\u308b\u3053\u3068",
+                  "1) \u6700\u5c0f\u69cb\u6210\u3067\u8a66\u3059",
+                  "2) \u6210\u529f/\u5931\u6557\u6761\u4ef6\u3067\u5224\u5b9a\u3057\u3001\u5b66\u3073\u3092\u66f8\u304f",
+                  "3) \u9032\u3080\uff1a`/approve` / \u4fdd\u7559\uff1a`/freeze`",
+                  "",
+                  "## ChatGPT PoC\u624b\u9806\u30d7\u30ed\u30f3\u30d7\u30c8\uff08\u30b3\u30d4\u30da\uff09",
+                  "\u4ee5\u4e0b\u3092\u6e80\u305f\u3059PoC\u624b\u9806\u3092\u4f5c\u3063\u3066\u304f\u3060\u3055\u3044\uff1a",
+                  "- \u6700\u5c0f\u69cb\u6210\uff08\u6700\u77ed\u3067\u78ba\u8a8d\u3067\u304d\u308b\u624b\u9806\uff09",
+                  "- \u4e8b\u524d\u6e96\u5099\uff08\u5fc5\u8981\u7269/\u74b0\u5883/\u8a2d\u5b9a\uff09",
+                  "- \u624b\u9806\uff08\u756a\u53f7\u4ed8\u304d\uff09",
+                  "- \u6210\u529f\u6761\u4ef6 / \u5931\u6557\u6761\u4ef6",
+                  "- \u5931\u6557\u6642\u306e\u5207\u308a\u5206\u3051\u30c1\u30a7\u30c3\u30af",
+                  "- \u60f3\u5b9a\u6240\u8981\u6642\u9593\u3001\u8a66\u884c\u56de\u6570\u306e\u76ee\u5b89",
+                  "",
+                  "\u524d\u63d0\u60c5\u5831\uff1a",
+                  "\uff08Research\u7d50\u679c\u3068\u6700\u5c0fPoC\u6848\u3092\u8cbc\u308b\uff09",
+                  "",
+                  "## Issue\u8cbc\u4ed8\u30c6\u30f3\u30d7\u30ec",
+                  "### PoC \u7d50\u679c",
+                  "- \u5b9f\u65bd\u65e5\uff1a",
+                  "- \u5b9f\u65bd\u74b0\u5883\uff1a",
+                  "- \u7d50\u679c\uff1a",
+                  "- \u5224\u5b9a\uff08\u6210\u529f/\u5931\u6557\uff09\uff1a",
+                  "- \u5b66\u3073\uff1a",
+                  "- \u6b21\u306e\u5224\u65ad\uff1a",
+                  "- \u6b21\u306e1\u624b\uff1a",
+                  "",
+                  "\u9032\u3080\uff1a`/approve` / \u4fdd\u7559\uff1a`/freeze`"
+                ].join("\n"),
+                "phase:design": [
+                  "\ud83d\udcdc **Design\uff08\u8a2d\u8a08\u30fb\u4ed5\u69d8\u307e\u3068\u3081\uff09**",
+                  "",
+                  "## \u6b21\u306b\u3084\u308b\u3053\u3068",
+                  "1) \u4ed5\u69d8/\u69cb\u6210/\u30d5\u30ed\u30fc\u3092Markdown\u3067\u4e00\u679a\u306b\u307e\u3068\u3081る",
+                  "2) \u5b9f\u88c5\u30bf\u30b9\u30af\u306b\u5206\u5272",
+                  "3) \u6b21\u3078\uff1a`/approve`",
+                  "",
+                  "## ChatGPT\u8a2d\u8a08\u30d7\u30ed\u30f3\u30d7\u30c8\uff08\u30b3\u30d4\u30da\uff09",
+                  "\u4ee5\u4e0b\u3092Markdown\u3067\u8a2d\u8a08\u3068\u3057\u3066\u307e\u3068\u3081\u3066\u304f\u3060\u3055\u3044\uff1a",
+                  "- \u76ee\u7684/\u30b4\u30fc\u30eb",
+                  "- \u30b9\u30b3\u30fc\u30d7\uff08\u3084\u308b/\u3084\u3089\u306a\u3044\uff09",
+                  "- \u5168\u4f53\u69cb\u6210\uff08\u30e2\u30b8\u30e5\u30fc\u30eb/\u30b3\u30f3\u30dd\u30fc\u30cd\u30f3\u30c8\uff09",
+                  "- \u4e3b\u8981\u30d5\u30ed\u30fc\uff08\u624b\u9806\uff09",
+                  "- \u30ea\u30b9\u30af\u3068\u5bfe\u7b56",
+                  "- \u30bf\u30b9\u30af\u5206\u5272\uff083\u301c10\u500b\uff09",
+                  "",
+                  "\u524d\u63d0\uff1a",
+                  "\uff08PoC\u7d50\u679c\u3068\u6c7a\u5b9a\u4e8b\u9805\u3092\u8cbc\u308b\uff09",
+                  "",
+                  "## Issue\u8cbc\u4ed8\u30c6\u30f3\u30d7\u30ec",
+                  "### Design \u307e\u3068\u3081",
+                  "- \u76ee\u7684\uff1a",
+                  "- \u30b9\u30b3\u30fc\u30d7\uff1a",
+                  "- \u69cb\u6210\uff1a",
+                  "- \u30d5\u30ed\u30fc\uff1a",
+                  "- \u30ea\u30b9\u30af\uff1a",
+                  "- \u30bf\u30b9\u30af\u5206\u5272\uff1a",
+                  "  - [ ]",
+                  "  - [ ]",
+                  "  - [ ]",
+                  "",
+                  "\u6b21\u3078\uff1a`/approve`"
+                ].join("\n"),
+                "phase:implement": [
+                  "\ud83d\udee0 **Implement\uff08\u5b9f\u88c5\u6e96\u5099\uff1aCodex\u3078\u6e96\u5099\uff09**",
+                  "",
+                  "## \u6b21\u306b\u3084\u308b\u3053\u3068",
+                  "1) Codex\u7528\u30d7\u30ed\u30f3\u30d7\u30c8\u3092\u4f5c\u308b",
+                  "2) \u5fc5\u8981\u306a\u3089\u5b50Issue\u306b\u5206\u5272",
+                  "",
+                  "## Codex\u30d7\u30ed\u30f3\u30d7\u30c8\u96a0\u5f62\uff08\u30b3\u30d4\u30da\uff09",
+                  "\u4ee5\u4e0b\u306e\u4ed5\u69d8\u3067\u5b9f\u88c5\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+                  "",
+                  "# \u76ee\u7684",
+                  "\uff08\u76ee\u7684\uff09",
+                  "",
+                  "# \u30b9\u30b3\u30fc\u30d7",
+                  "\uff08\u3084\u308b/\u3084\u3089\u306a\u3044\uff09",
+                  "",
+                  "# \u8981\u4ef6",
+                  "- \uff08\u8981\u4ef61\uff09",
+                  "- \uff08\u8981\u4ef62\uff09",
+                  "",
+                  "# \u8a2d\u8a08",
+                  "\uff08Design\u307e\u3068\u3081\u3092\u8cbc\u308b\uff09",
+                  "",
+                  "# \u30bf\u30b9\u30af",
+                  "- \uff08\u30bf\u30b9\u30af\u4e00\u89a7\uff09",
+                  "",
+                  "# \u671f\u5f85\u3059\u308b\u6210\u679c\u7269",
+                  "- \u30b3\u30fc\u30c9",
+                  "- \u4f7f\u3044\u65b9/README\u66f4\u65b0\uff08\u5fc5\u8981\u306a\u3089\uff09",
+                  "- \u30c6\u30b9\u30c8/\u78ba\u8a8d\u624b\u9806\uff08\u53ef\u80fd\u306a\u3089\uff09",
+                  "",
+                  "## Issue\u8cbc\u4ed8\u30c6\u30f3\u30d7\u30ec",
+                  "### Implement\u6e96\u5099",
+                  "- Codex\u30d7\u30ed\u30f3\u30d7\u30c8\uff1a",
+                  "- \u5206\u5272Issue\uff1a",
+                  "- PR\uff1a"
+                ].join("\n"),
+                "phase:frozen": [
+                  "\u2744 **Frozen\uff08\u4fdd\u7559\uff09**",
+                  "",
+                  "- \u3044\u3063\u305f\u3093\u4fdd\u7559\uff08\u60aa\u3044\u7d50\u679c\u3067\u306f\u3042\u308a\u307e\u305b\u3093\uff09",
+                  "- \u518d\u958b\uff1a`/phase idea_explore`",
+                  "",
+                  "## Frozen\u30e1\u30e2\u30c6\u30f3\u30d7\u30ec",
+                  "### Frozen \u30e1\u30e2",
+                  "- \u4fdd\u7559\u7406\u7531\uff1a",
+                  "- \u518d\u958b\u6761\u4ef6\uff1a",
+                  "- \u6b21\u306b\u898b\u308b\u3068\u304d\u306e\u4e00\u8a00\uff1a"
+                ].join("\n")
               };
-              return map[phase] || `Phase: ${phase}`;
+              return map[phase] || `Phase: \`${phase}\``;
             }
 
             async function comment(msg) {
               await github.rest.issues.createComment({ owner, repo, issue_number, body: msg });
             }
 
-            async function getIssue() {
-              const res = await github.rest.issues.get({ owner, repo, issue_number });
-              return res.data;
-            }
-
-            if (body === "/approve") {
+            if (lower === "/approve") {
               const issue = await getIssue();
               const curr = currentPhase(issue);
               const next = nextPhaseOf(curr);
               await setPhase(issue, next);
-              await comment(`✅ Phase moved: ${curr || "none"} → ${next}\n\n${guidance(next)}`);
+              await comment(`\u2705 Phase moved: \`${curr || "none"}\` \u2192 \`${next}\`\n\n${phaseGuidance(next)}`);
               return;
             }
 
-            if (body === "/freeze") {
+            if (lower === "/freeze") {
               const issue = await getIssue();
               const curr = currentPhase(issue);
               const next = "phase:frozen";
               await setPhase(issue, next);
-              await comment(`❄️ Frozen: ${curr || "none"} → ${next}\n\n${guidance(next)}`);
+              await comment(`\u2744\ufe0f Frozen: \`${curr || "none"}\` \u2192 \`${next}\`\n\n${phaseGuidance(next)}`);
               return;
             }
 
-            if (body.startsWith("/phase")) {
-              const issue = await getIssue();
-              const parts = body.split(/\s+/).filter(Boolean);
+            if (lower.startsWith("/phase")) {
+              const parts = bodyRaw.split(/\s+/).filter(Boolean);
               if (parts.length < 2) {
-                await comment("Usage: /phase idea_explore|idea_define|research|poc|design|implement|frozen");
+                await comment("Usage: `/phase idea_explore|idea_define|research|poc|design|implement|frozen`");
                 return;
               }
-              let name = parts[1].trim();
-              const alias = { idea: "idea_explore", explore: "idea_explore", define: "idea_define" };
+              let name = parts[1].trim().toLowerCase();
+              const alias = { "idea": "idea_explore", "explore": "idea_explore", "define": "idea_define" };
               if (alias[name]) name = alias[name];
+
               const label = name.startsWith("phase:") ? name : `phase:${name}`;
               if (!validPhases.has(label)) {
-                await comment(`Unknown phase: ${label}`);
+                await comment(`Unknown phase: \`${label}\`\nValid: ${[...validPhases].map(x => `\`${x}\``).join(", ")}`);
                 return;
               }
+
+              const issue = await getIssue();
               const curr = currentPhase(issue);
               await setPhase(issue, label);
-              await comment(`🧭 Phase set: ${curr || "none"} → ${label}\n\n${guidance(label)}`);
+              await comment(`\ud83e\udded Phase set: \`${curr || "none"}\` \u2192 \`${label}\`\n\n${phaseGuidance(label)}`);
               return;
             }
